@@ -1,0 +1,9 @@
+*.c
+*.import.scm
+*.link
+*.log
+*.o
+*.rule
+*.so
+*.sh
+proxy-cli

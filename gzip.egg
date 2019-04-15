@@ -1,0 +1,10 @@
+((license "GPL-3")
+ (category data)
+ (dependencies zlib)
+ (test-dependencies test)
+ (author "Robert C Jensen")
+ (synopsis "gzip")
+ (component-options
+   (csc-options "-:a32" "-L" "-lz"))
+ (components
+    (extension gzip)))
