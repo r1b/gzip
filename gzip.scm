@@ -15,6 +15,13 @@
   #include <zlib.h>
   <#
 
+  ; flag bits
+  (define FTEXT 0)
+  (define FHCRC 1)
+  (define FEXTRA 2)
+  (define FNAME 3)
+  (define FCOMMENT 4)
+
   (define-foreign-variable Z_NULL unsigned-c-string)
 
   (define (crc32 checksum buf size)
@@ -25,13 +32,31 @@
     (let ((fname (port-name port)))
       (if (string-suffix? ".gz" fname) (string-drop-right fname 3) fname)))
 
-  ; TODO: pull this out into a pack macro
+  ; TODO: use endian-blob? tbh i find it cumbersome..
+  ;
+  ; (define (pack-u32 n)
+  ;  (byte-blob->string (endian-blob-object (u32vector->endian-blob (u32vector n) LSB))))
+  ;
+  ; or...write a pack macro
+
   (define (pack-u32 n)
     (list->string (map integer->char
                        (list (bitwise-and n #x000000ff)
                              (arithmetic-shift (bitwise-and n #x0000ff00) -8)
                              (arithmetic-shift (bitwise-and n #x00ff0000) -16)
                              (arithmetic-shift (bitwise-and n #xff000000) -24)))))
+
+  (define (unpack-u32 s)
+    (let ((bv (map char->integer (string->list s))))
+      (+ (list-ref bv 0)
+         (arithmetic-shift (list-ref bv 1) 8)
+         (arithmetic-shift (list-ref bv 2) 16)
+         (arithmetic-shift (list-ref bv 3) 24))))
+
+  (define (unpack-u16 s)
+    (let ((bv (map char->integer (string->list s))))
+      (+ (list-ref bv 0)
+         (arithmetic-shift (list-ref bv 1) 8))))
 
   (define (write-gzip-header output-port level)
     (begin
@@ -87,5 +112,59 @@
               (write-gzip-trailer checksum size output-port)
               (flush-output output-port)))))))
 
+  (define (read-gzip-header input-port)
+    (let ((magic (read-string 2 input-port)))
+      (and (not (eof-object? magic))
+           (begin
+             (when (not (string=? magic "\x1f\x8b"))
+               (error "Invalid magic bytes" magic))
+             (let ((method (read-string 1 input-port)))
+               (when (not (= method "\x08"))
+                 (error "Invalid compression method" method)))
+             (letrec ((flags (string->number (read-string 1 input-port)))
+                      (read-c-string
+                        (lambda ()
+                          (unless (string=? (read-string 1 input-port) "\x00")
+                            (read-c-string)))))
+               (begin
+                 (when (bit->boolean flags FEXTRA)
+                   (let ((extra-length (unpack-u16 (read-string 2 input-port))))
+                     (read-string extra-length input-port)))
+                 (when (bit->boolean flags FNAME)
+                   (read-c-string))
+                 (when (bit->boolean flags FCOMMENT)
+                   (read-c-string))
+                 (when (bit->boolean flags FHCRC)
+                   (read-string 2 input-port))
+                 #t)))))))
+
+  (define (read-gzip-trailer buf input-port) 42)
+
   (define (open-gzip-compressed-input-port #!optional (input-port (current-input-port)))
-    42))
+    (let* ((inflate-port (open-zlib-compressed-input-port input-port))
+           (buf "")
+           (checksum (crc32 0 Z_NULL 0))
+           (size 0))
+      (begin
+        (and (read-gzip-header input-port)
+             (make-input-port
+               (lambda ()  ; read-char
+                 (let ((char (read-char inflate-port)))
+                   (begin
+                     (if (eof-object? char)
+                         (begin
+                           (read-gzip-trailer buf input-port)
+                           (set! buf "")
+                           (when (read-gzip-header input-port)
+                             (set! char (read-char inflate-port))
+                             (set! buf (string-append buf (write-string 1 char)))))
+                         (set! buf (string-append buf (write-string 1 char))))
+                     char)))
+               (lambda ()  ; char-ready?
+                 (or (char-ready? inflate-port)
+                     (begin
+                       (read-gzip-trailer buf input-port)
+                       (set! buf "")
+                       (read-gzip-header))))
+               (lambda ()  ; close
+                 (close-input-port inflate-port))))))))
