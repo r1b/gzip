@@ -32,12 +32,7 @@
     (let ((fname (port-name port)))
       (if (string-suffix? ".gz" fname) (string-drop-right fname 3) fname)))
 
-  ; TODO: use endian-blob? tbh i find it cumbersome..
-  ;
-  ; (define (pack-u32 n)
-  ;  (byte-blob->string (endian-blob-object (u32vector->endian-blob (u32vector n) LSB))))
-  ;
-  ; or...write a pack macro
+  ; TODO: use bitstring
 
   (define (pack-u32 n)
     (list->string (map integer->char
@@ -138,7 +133,13 @@
                    (read-string 2 input-port))
                  #t)))))))
 
-  (define (read-gzip-trailer buf input-port) 42)
+  (define (read-gzip-trailer actual-checksum actual-size input-port)
+    (let ((expected-checksum (unpack-u32 (read-string 4 input-port)))
+          (expected-size (unpack-u32 (read-string 4 input-port))))
+      (unless (= expected-size actual-size)
+        (error "Invalid size" expected-size actual-size))
+      (unless (= expected-checksum actual-checksum)
+        (error "Invalid checksum" expected-checksum actual-checksum))))
 
   (define (open-gzip-compressed-input-port #!optional (input-port (current-input-port)))
     (let* ((inflate-port (open-zlib-compressed-input-port input-port))
@@ -151,20 +152,20 @@
                (lambda ()  ; read-char
                  (let ((char (read-char inflate-port)))
                    (begin
-                     (if (eof-object? char)
-                         (begin
-                           (read-gzip-trailer buf input-port)
-                           (set! buf "")
-                           (when (read-gzip-header input-port)
-                             (set! char (read-char inflate-port))
-                             (set! buf (string-append buf (write-string 1 char)))))
-                         (set! buf (string-append buf (write-string 1 char))))
+                     ; FIXME this reads a little funny
+                     (when (eof-object? char)  ; end of member
+                       (read-gzip-trailer buf input-port)
+                       (when (read-gzip-header input-port)  ; new member
+                         (set! char (read-char inflate-port))))
+                     (unless (eof-object? char)
+                       (set! size (string-length buf))
+                       (set! checksum (crc32 checksum buf size))
+                       (set! buf (string-append buf (make-string 1 char))))
                      char)))
                (lambda ()  ; char-ready?
                  (or (char-ready? inflate-port)
                      (begin
                        (read-gzip-trailer buf input-port)
-                       (set! buf "")
                        (read-gzip-header))))
                (lambda ()  ; close
                  (close-input-port inflate-port))))))))
