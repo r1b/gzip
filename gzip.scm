@@ -114,7 +114,7 @@
              (when (not (string=? magic "\x1f\x8b"))
                (error "Invalid magic bytes" magic))
              (let ((method (read-string 1 input-port)))
-               (when (not (= method "\x08"))
+               (when (not (string=? method "\x08"))
                  (error "Invalid compression method" method)))
              (letrec ((flags (string->number (read-string 1 input-port)))
                       (read-c-string
@@ -131,7 +131,7 @@
                    (read-c-string))
                  (when (bit->boolean flags FHCRC)
                    (read-string 2 input-port))
-                 #t)))))))
+                 #t))))))
 
   (define (read-gzip-trailer actual-checksum actual-size input-port)
     (let ((expected-checksum (unpack-u32 (read-string 4 input-port)))
@@ -154,7 +154,7 @@
                    (begin
                      ; FIXME this reads a little funny
                      (when (eof-object? char)  ; end of member
-                       (read-gzip-trailer buf input-port)
+                       (read-gzip-trailer checksum size input-port)
                        (when (read-gzip-header input-port)  ; new member
                          (set! char (read-char inflate-port))))
                      (unless (eof-object? char)
@@ -165,7 +165,7 @@
                (lambda ()  ; char-ready?
                  (or (char-ready? inflate-port)
                      (begin
-                       (read-gzip-trailer buf input-port)
-                       (read-gzip-header))))
+                       (read-gzip-trailer checksum size input-port)
+                       (read-gzip-header input-port))))
                (lambda ()  ; close
                  (close-input-port inflate-port))))))))
